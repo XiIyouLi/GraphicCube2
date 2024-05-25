@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+
+  </head>
+  <body>
+    <canvas id="canvas" width="500" height="500"></canvas>
+    <!-- 1: 设置type = module, 用ES6 方式编写 -->
+    <!-- 2: 是否支持WebGPU: navigator.gpu -->
+    <script src="./gl-matric.js"></script>
+    <script type="module">
+      /* 3: WebGPU 配置 上下文 */
+      // 请求GPUAdapter 适配器
+
+      const adapter = await navigator.gpu.requestAdapter();
+      const device = await adapter.requestDevice();
+      const canvas = document.getElementById("canvas");
+      const context = canvas.getContext("webgpu");
+
+      // canvas 和 WebGPU 之间建立联系
+      const format = navigator.gpu.getPreferredCanvasFormat();
+      context.configure({
+        device,
+        format,
+      });
+
+      // 创建定点缓冲区顶点数据
+      const cubeVertexArray = new Float32Array([
+        1, -1, 1, 1, 1, 0, 1, 1, 1, 1, -1, -1, 1, 1, 0, 0, 1, 1, 0, 1, -1, -1,
+        -1, 1, 0, 0, 0, 1, 0, 0, 1, -1, -1, 1, 1, 0, 0, 1, 1, 0, 1, -1, 1, 1, 1,
+        0, 1, 1, 1, 1, -1, -1, -1, 1, 0, 0, 0, 1, 0, 0,
+
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, 1, 1, 1, 0, 1, 1, 0, 1, 1, -1, -1,
+        1, 1, 0, 0, 1, 0, 0, 1, 1, -1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, -1, -1, 1, 1, 0, 0, 1, 0, 0,
+
+        -1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, -1,
+        1, 1, 1, 0, 1, 0, 0, -1, 1, -1, 1, 0, 1, 0, 1, 1, 0, -1, 1, 1, 1, 0, 1,
+        1, 1, 1, 1, 1, 1, -1, 1, 1, 1, 0, 1, 0, 0,
+
+        -1, -1, 1, 1, 0, 0, 1, 1, 1, 1, -1, 1, 1, 1, 0, 1, 1, 1, 0, 1, -1, 1,
+        -1, 1, 0, 1, 0, 1, 0, 0, -1, -1, -1, 1, 0, 0, 0, 1, 1, 0, -1, -1, 1, 1,
+        0, 0, 1, 1, 1, 1, -1, 1, -1, 1, 0, 1, 0, 1, 0, 0,
+
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, 1, 1, 1, 0, 1, 1, 1, 0, 1, -1, -1, 1,
+        1, 0, 0, 1, 1, 0, 0, -1, -1, 1, 1, 0, 0, 1, 1, 0, 0, 1, -1, 1, 1, 1, 0,
+        1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+
+        1, -1, -1, 1, 1, 0, 0, 1, 1, 1, -1, -1, -1, 1, 0, 0, 0, 1, 0, 1, -1, 1,
+        -1, 1, 0, 1, 0, 1, 0, 0, 1, 1, -1, 1, 1, 1, 0, 1, 1, 0, 1, -1, -1, 1, 1,
+        0, 0, 1, 1, 1, -1, 1, -1, 1, 0, 1, 0, 1, 0, 0,
+      ]);
+
+      // 创建缓冲区, 存放订单数据
+      const verticesBuffer = device.createBuffer({
+        size: cubeVertexArray.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+      device.queue.writeBuffer(verticesBuffer, 0, cubeVertexArray);
+
+      const module = device.createShaderModule({
+        label: "triangle shaders with uniforms",
+        code: `
+                    struct Uniforms {
+                    modelViewProjectionMatrix : mat4x4f//这里不能用分号
+                    };
+
+                    @group(0) @binding(0) var<uniform> uniforms : Uniforms;
+
+                    struct VertexOutput {
+                    @builtin(position) Position : vec4f,
+                    @location(0) fragUV : vec2f,
+                    @location(1) fragPosition: vec4f
+                    };
+
+                    @vertex
+                    fn vs(@location(0) position : vec4f,@location(1) uv : vec2f) -> VertexOutput {
+                    var output : VertexOutput;
+                    output.Position =  uniforms.modelViewProjectionMatrix * position;
+                    output.fragUV = uv;
+                    output.fragPosition = 0.5 * (position + vec4f(1.0, 1.0, 1.0, 1.0));
+                    return output;
+                    }
+
+                    @fragment 
+                    fn fs(@location(0) fragUV: vec2<f32>,@location(1) fragPosition: vec4<f32>) -> @location(0) vec4<f32> {
+                    return fragPosition;
+                    }
+                    `,
+      });
+
+      // 创建渲染管线, 配置
+      const pipeline = device.createRenderPipeline({
+        layout: "auto", // 自动布局
+        vertex: {
+          module: module, // 设置渲染管线要执行的着色器代码
+          entryPoint: "vs", // 入口
+          buffers: [
+            {
+              arrayStride: 4 * 10, // 一个顶点数据占用的字节长度
+              attributes: [
+                {
+                  shaderLocation: 0,
+                  offset: 0,
+                  format: "float32x4",
+                },
+                {
+                  shaderLocation: 1,
+                  offset: 4 * 8,
+                  format: "float32x2",
+                },
+              ],
+            },
+          ],
+        },
+        fragment: {
+          module: module, // 设置渲染管线要执行的着色器代码
+          entryPoint: "fs", // 入口
+          targets: [
+            {
+              format,
+            },
+          ],
+        },
+        primitive: {
+          topology: "triangle-list",
+          cullMode: "back",
+        },
+        depthStencil: {
+          depthWriteEnabled: true,
+          depthCompare: "less",
+          format: "depth24plus",
+        },
+      });
+
+      const uniformBuffer = device.createBuffer({
+        size: 4 * 16,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+
+      const uniformBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          {
+            binding: 0,
+            resource: {
+              buffer: uniformBuffer,
+            },
+          },
+        ],
+      });
+
+      const depthTexture = device.createTexture({
+        size: {
+          width: canvas.width,
+          height: canvas.height,
+        },
+        format: "depth24plus",
+        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      });
+
+      const renderPassDescriptor = {
+        colorAttachments: [
+          {
+            loadOp: "clear",
+            clearValue: [0.0, 0.0, 0.5, 0.2],
+            storeOp: "store",
+          },
+        ],
+        depthStencilAttachment: {
+          view: depthTexture.createView(),
+          depthStoreOp: "store",
+          depthClearValue: 1.0,
+          depthLoadOp: "clear",
+          depthLoadValue: 1.0,
+        },
+      };
+
+      const aspect = canvas.width / canvas.height;
+      const projectionMatrix = glMatrix.mat4.create();
+      glMatrix.mat4.perspective(
+        projectionMatrix,
+        (2 * Math.PI) / 7,
+        aspect,
+        1,
+        100.0
+      );
+
+      function getTransformationMatrix() {
+        let viewMatrix = glMatrix.mat4.create();
+        glMatrix.mat4.translate(
+          viewMatrix,
+          viewMatrix,
+          glMatrix.vec3.fromValues(0, 0, -5)
+        );
+        let now = Date.now() / 1000;
+        glMatrix.mat4.rotate(
+          viewMatrix,
+          viewMatrix,
+          1,
+          glMatrix.vec3.fromValues(Math.sin(now), Math.cos(now), 0)
+        );
+
+        let modelViewProjectionMatrix = glMatrix.mat4.create();
+        glMatrix.mat4.multiply(
+          modelViewProjectionMatrix,
+          projectionMatrix,
+          viewMatrix
+        );
+
+        return modelViewProjectionMatrix;
+      }
+
+      function frame() {
+        const transformationMatrix = getTransformationMatrix();
+        device.queue.writeBuffer(
+          uniformBuffer,
+          0,
+          transformationMatrix.buffer,
+          transformationMatrix.byteOffset,
+          transformationMatrix.byteLength
+        );
+
+        renderPassDescriptor.colorAttachments[0].view = context
+          .getCurrentTexture()
+          .createView();
+
+        const commandEncoder = device.createCommandEncoder();
+        const passEncoder =
+          commandEncoder.beginRenderPass(renderPassDescriptor);
+        passEncoder.setPipeline(pipeline);
+        passEncoder.setBindGroup(0, uniformBindGroup);
+        passEncoder.setVertexBuffer(0, verticesBuffer);
+        passEncoder.draw(36, 1, 0, 0);
+        passEncoder.end();
+        device.queue.submit([commandEncoder.finish()]);
+        requestAnimationFrame(frame);
+      }
+      frame();
+    </script>
+  </body>
+</html>
